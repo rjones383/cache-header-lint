@@ -1,0 +1,14 @@
+[package]
+name = "cachelint"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Lint HTTP Cache-Control headers in captured response dumps"
+
+[lib]
+name = "cachelint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cachelint"
+path = "src/main.rs"
