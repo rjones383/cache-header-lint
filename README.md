@@ -2,8 +2,9 @@
 
 Cache-Control headers are easy to get subtly wrong: `no-store` next to a
 `max-age`, `immutable` on something that also says `no-cache`, an `Expires`
-header nobody remembered to delete after adding `max-age`. None of these
-are invalid HTTP, they're just contradictions that mean the header was
+header nobody remembered to delete after adding `max-age`, a `Vary: *` that
+quietly makes a `max-age` response uncacheable in any shared cache. None of
+these are invalid HTTP, they're just contradictions that mean the header was
 probably written by hand and not actually thought through. cachelint reads a
 dump of response headers and points out that kind of thing.
 
@@ -69,7 +70,8 @@ argument-parsing crate would be adding weight without adding much.
 ## Status
 
 Early. The lint rules so far only cover a handful of `Cache-Control`
-contradictions — see the roadmap below for what's missing.
+and `Vary` contradictions; JSON output, multi-file input, and a `--strict`
+flag are still missing.
 
 ## License
 

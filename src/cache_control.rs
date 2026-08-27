@@ -52,6 +52,11 @@ impl CacheControl {
         self.value_of("max-age").and_then(|v| v.parse().ok())
     }
 
+    pub fn stale_while_revalidate(&self) -> Option<u64> {
+        self.value_of("stale-while-revalidate")
+            .and_then(|v| v.parse().ok())
+    }
+
     pub fn directives(&self) -> &[Directive] {
         &self.directives
     }
@@ -74,5 +79,11 @@ mod tests {
         let cc = CacheControl::parse("Max-Age=10, NO-STORE");
         assert!(cc.has("no-store"));
         assert_eq!(cc.max_age(), Some(10));
+    }
+
+    #[test]
+    fn parses_stale_while_revalidate() {
+        let cc = CacheControl::parse("max-age=60, stale-while-revalidate=30");
+        assert_eq!(cc.stale_while_revalidate(), Some(30));
     }
 }

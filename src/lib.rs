@@ -153,7 +153,9 @@ pub fn lint(record: &HeaderRecord) -> Vec<Finding> {
             ));
         }
         Some(cc) => {
-            if cc.has("no-store") && (cc.has("max-age") || cc.has("immutable")) {
+            if cc.has("no-store")
+                && (cc.has("max-age") || cc.has("immutable") || cc.has("stale-while-revalidate"))
+            {
                 findings.push(Finding::new(
                     Severity::Warning,
                     "no-store combined with a freshness directive; no-store wins, so the \
@@ -175,6 +177,14 @@ pub fn lint(record: &HeaderRecord) -> Vec<Finding> {
                      is dead weight",
                 ));
             }
+
+            if cc.has("stale-while-revalidate") && !cc.has("no-store") && cc.max_age().is_none() {
+                findings.push(Finding::new(
+                    Severity::Info,
+                    "stale-while-revalidate without max-age; there's no declared freshness \
+                     lifetime for it to extend",
+                ));
+            }
         }
     }
 
@@ -183,6 +193,21 @@ pub fn lint(record: &HeaderRecord) -> Vec<Finding> {
         .as_ref()
         .map(|cc| !cc.has("no-store"))
         .unwrap_or(true);
+
+    let has_freshness_directive = cache_control
+        .as_ref()
+        .map(|cc| cc.has("max-age") || cc.has("public"))
+        .unwrap_or(false);
+
+    if let Some(vary) = record.get("vary") {
+        if vary.trim() == "*" && stores && has_freshness_directive {
+            findings.push(Finding::new(
+                Severity::Warning,
+                "Vary: * combined with a freshness directive; shared caches treat Vary: * \
+                 as never matching, so the response can never actually be reused from cache",
+            ));
+        }
+    }
 
     if !revalidatable && stores {
         findings.push(Finding::new(
@@ -219,6 +244,46 @@ mod tests {
     fn flags_no_store_with_max_age() {
         let findings = lint(&record(&[("Cache-Control", "no-store, max-age=60")]));
         assert!(findings.iter().any(|f| f.message.contains("no-store")));
+    }
+
+    #[test]
+    fn flags_no_store_with_stale_while_revalidate() {
+        let findings = lint(&record(&[(
+            "Cache-Control",
+            "no-store, stale-while-revalidate=30",
+        )]));
+        assert!(findings.iter().any(|f| f.message.contains("no-store")));
+    }
+
+    #[test]
+    fn flags_stale_while_revalidate_without_max_age() {
+        let findings = lint(&record(&[
+            ("Cache-Control", "stale-while-revalidate=30"),
+            ("ETag", "\"abc\""),
+        ]));
+        assert!(findings
+            .iter()
+            .any(|f| f.message.contains("stale-while-revalidate without max-age")));
+    }
+
+    #[test]
+    fn flags_vary_star_with_max_age() {
+        let findings = lint(&record(&[
+            ("Cache-Control", "max-age=300"),
+            ("Vary", "*"),
+            ("ETag", "\"abc\""),
+        ]));
+        assert!(findings.iter().any(|f| f.message.contains("Vary: *")));
+    }
+
+    #[test]
+    fn ignores_vary_star_without_freshness_directive() {
+        let findings = lint(&record(&[
+            ("Cache-Control", "no-cache"),
+            ("Vary", "*"),
+            ("ETag", "\"abc\""),
+        ]));
+        assert!(!findings.iter().any(|f| f.message.contains("Vary: *")));
     }
 
     #[test]
