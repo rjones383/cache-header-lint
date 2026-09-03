@@ -33,6 +33,21 @@ record 1 [HTTP/1.1 200 OK]
 No arguments means read from stdin. Exit code is 1 if anything was flagged,
 0 if the input was clean, 2 on an I/O error.
 
+Pass `--format json` to get one JSON object per line for each record that
+has findings, instead of the text block:
+
+```
+cachelint --format json headers.txt
+```
+
+```
+{"record":1,"status_line":"HTTP/1.1 200 OK","findings":[{"severity":"info","message":"no ETag or Last-Modified; a conditional request has nothing to send once the response goes stale"}]}
+```
+
+Records with no findings produce no output in either format, so the JSON
+output is one line per flagged record and can be piped straight into `jq`
+or similar.
+
 ## Input format
 
 Records are separated by a blank line: a status line, then header lines,
@@ -70,8 +85,8 @@ argument-parsing crate would be adding weight without adding much.
 ## Status
 
 Early. The lint rules so far only cover a handful of `Cache-Control`
-and `Vary` contradictions; JSON output, multi-file input, and a `--strict`
-flag are still missing.
+and `Vary` contradictions; multi-file input and a `--strict` flag are
+still missing.
 
 ## License
 
