@@ -12,12 +12,12 @@ enum Format {
 }
 
 struct Args {
-    path: Option<String>,
+    paths: Vec<String>,
     format: Format,
 }
 
 fn parse_args<I: Iterator<Item = String>>(mut argv: I) -> Result<Args, String> {
-    let mut path = None;
+    let mut paths = Vec::new();
     let mut format = Format::Text;
 
     while let Some(arg) = argv.next() {
@@ -28,14 +28,12 @@ fn parse_args<I: Iterator<Item = String>>(mut argv: I) -> Result<Args, String> {
                 .next()
                 .ok_or_else(|| "--format requires a value (text or json)".to_string())?;
             format = parse_format(&value)?;
-        } else if path.is_none() {
-            path = Some(arg);
         } else {
-            return Err(format!("unexpected argument: {arg}"));
+            paths.push(arg);
         }
     }
 
-    Ok(Args { path, format })
+    Ok(Args { paths, format })
 }
 
 fn parse_format(value: &str) -> Result<Format, String> {
@@ -55,24 +53,43 @@ fn main() -> ExitCode {
         }
     };
 
-    let outcome = match &args.path {
-        Some(path) => File::open(path).map(|f| run(f, args.format)),
-        None => Ok(run(io::stdin(), args.format)),
-    };
+    if args.paths.is_empty() {
+        return match run(io::stdin(), args.format, None) {
+            true => ExitCode::from(1),
+            false => ExitCode::SUCCESS,
+        };
+    }
 
-    match outcome {
-        Ok(true) => ExitCode::from(1),
-        Ok(false) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("cachelint: {e}");
-            ExitCode::from(2)
+    // With one file there's nothing to disambiguate, so leave the output
+    // matching the stdin case; with several, prefix each line with its
+    // source so findings from a batch of captures don't get mixed up.
+    let label_paths = args.paths.len() > 1;
+    let mut saw_finding = false;
+    for path in &args.paths {
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("cachelint: {path}: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let label = if label_paths { Some(path.as_str()) } else { None };
+        if run(file, args.format, label) {
+            saw_finding = true;
         }
+    }
+
+    if saw_finding {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
 /// Lints every record in `input`, printing findings as they're found.
+/// `source` is included in the output when linting one of several files.
 /// Returns true if anything was flagged.
-fn run<R: Read>(input: R, format: Format) -> bool {
+fn run<R: Read>(input: R, format: Format, source: Option<&str>) -> bool {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let mut saw_finding = false;
@@ -84,13 +101,19 @@ fn run<R: Read>(input: R, format: Format) -> bool {
             Err(e) => {
                 saw_finding = true;
                 match format {
-                    Format::Text => {
-                        let _ = writeln!(out, "record {index}: read error: {e}");
-                    }
+                    Format::Text => match source {
+                        Some(path) => {
+                            let _ = writeln!(out, "{path}: record {index}: read error: {e}");
+                        }
+                        None => {
+                            let _ = writeln!(out, "record {index}: read error: {e}");
+                        }
+                    },
                     Format::Json => {
                         let _ = writeln!(
                             out,
-                            "{{\"record\":{index},\"error\":{}}}",
+                            "{{{}\"record\":{index},\"error\":{}}}",
+                            file_field(source),
                             json_string(&e.to_string())
                         );
                     }
@@ -106,10 +129,17 @@ fn run<R: Read>(input: R, format: Format) -> bool {
         }
 
         saw_finding = true;
-        let label = record.status_line.as_deref().unwrap_or("(no status line)");
+        let status = record.status_line.as_deref().unwrap_or("(no status line)");
         match format {
             Format::Text => {
-                let _ = writeln!(out, "record {index} [{label}]");
+                match source {
+                    Some(path) => {
+                        let _ = writeln!(out, "{path}: record {index} [{status}]");
+                    }
+                    None => {
+                        let _ = writeln!(out, "record {index} [{status}]");
+                    }
+                }
                 for finding in &findings {
                     let _ = writeln!(out, "  {}: {}", finding.severity.as_str(), finding.message);
                 }
@@ -117,8 +147,9 @@ fn run<R: Read>(input: R, format: Format) -> bool {
             Format::Json => {
                 let _ = write!(
                     out,
-                    "{{\"record\":{index},\"status_line\":{},\"findings\":[",
-                    json_string(label)
+                    "{{{}\"record\":{index},\"status_line\":{},\"findings\":[",
+                    file_field(source),
+                    json_string(status)
                 );
                 for (i, finding) in findings.iter().enumerate() {
                     if i > 0 {
@@ -137,6 +168,15 @@ fn run<R: Read>(input: R, format: Format) -> bool {
     }
 
     saw_finding
+}
+
+/// Renders a leading `"file":"...",` object field for JSON output, or
+/// nothing when there's no source to disambiguate.
+fn file_field(source: Option<&str>) -> String {
+    match source {
+        Some(path) => format!("\"file\":{},", json_string(path)),
+        None => String::new(),
+    }
 }
 
 /// Renders `s` as a double-quoted JSON string literal.
@@ -181,14 +221,14 @@ mod tests {
         )
         .unwrap();
         assert!(args.format == Format::Json);
-        assert_eq!(args.path.as_deref(), Some("headers.txt"));
+        assert_eq!(args.paths, vec!["headers.txt".to_string()]);
     }
 
     #[test]
     fn parse_args_accepts_format_equals_form() {
         let args = parse_args(vec!["--format=json".to_string()].into_iter()).unwrap();
         assert!(args.format == Format::Json);
-        assert_eq!(args.path, None);
+        assert!(args.paths.is_empty());
     }
 
     #[test]
@@ -197,7 +237,27 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_rejects_second_positional() {
-        assert!(parse_args(vec!["a.txt".to_string(), "b.txt".to_string()].into_iter()).is_err());
+    fn parse_args_accepts_multiple_paths() {
+        let args = parse_args(
+            vec!["a.txt".to_string(), "b.txt".to_string(), "c.txt".to_string()].into_iter(),
+        )
+        .unwrap();
+        assert_eq!(args.paths, vec!["a.txt", "b.txt", "c.txt"]);
+    }
+
+    #[test]
+    fn parse_args_keeps_paths_in_order_regardless_of_flag_position() {
+        let args = parse_args(
+            vec![
+                "a.txt".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+                "b.txt".to_string(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        assert_eq!(args.paths, vec!["a.txt", "b.txt"]);
+        assert!(args.format == Format::Json);
     }
 }

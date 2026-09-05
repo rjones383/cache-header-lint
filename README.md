@@ -23,6 +23,21 @@ Or pipe directly:
 curl -D - -o /dev/null -s https://example.com/ | cachelint
 ```
 
+Pass more than one file to lint them all in one run:
+
+```
+cachelint headers-2026-09-01.txt headers-2026-09-02.txt
+```
+
+With a single file or stdin, output is unchanged. With more than one file,
+each line is prefixed with the path it came from (and JSON objects gain a
+`"file"` field), so findings from a batch of captures stay attributable:
+
+```
+headers-2026-09-02.txt: record 1 [HTTP/1.1 200 OK]
+  info: no ETag or Last-Modified; a conditional request has nothing to send once the response goes stale
+```
+
 Output looks like:
 
 ```
@@ -85,8 +100,7 @@ argument-parsing crate would be adding weight without adding much.
 ## Status
 
 Early. The lint rules so far only cover a handful of `Cache-Control`
-and `Vary` contradictions; multi-file input and a `--strict` flag are
-still missing.
+and `Vary` contradictions; a `--strict` flag is still missing.
 
 ## License
 
