@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::process::ExitCode;
 
-use cachelint::{lint, Records};
+use cachelint::{lint, Finding, Records, Severity};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -14,11 +14,13 @@ enum Format {
 struct Args {
     paths: Vec<String>,
     format: Format,
+    strict: bool,
 }
 
 fn parse_args<I: Iterator<Item = String>>(mut argv: I) -> Result<Args, String> {
     let mut paths = Vec::new();
     let mut format = Format::Text;
+    let mut strict = false;
 
     while let Some(arg) = argv.next() {
         if let Some(value) = arg.strip_prefix("--format=") {
@@ -28,12 +30,29 @@ fn parse_args<I: Iterator<Item = String>>(mut argv: I) -> Result<Args, String> {
                 .next()
                 .ok_or_else(|| "--format requires a value (text or json)".to_string())?;
             format = parse_format(&value)?;
+        } else if arg == "--strict" {
+            strict = true;
         } else {
             paths.push(arg);
         }
     }
 
-    Ok(Args { paths, format })
+    Ok(Args {
+        paths,
+        format,
+        strict,
+    })
+}
+
+/// Bumps `Info` findings up to `Warning` in place. Used for `--strict`,
+/// for callers that want cache-control nitpicks to read as actionable
+/// rather than background color, without changing which checks run.
+fn apply_strict(findings: &mut [Finding]) {
+    for finding in findings {
+        if finding.severity == Severity::Info {
+            finding.severity = Severity::Warning;
+        }
+    }
 }
 
 fn parse_format(value: &str) -> Result<Format, String> {
@@ -54,7 +73,7 @@ fn main() -> ExitCode {
     };
 
     if args.paths.is_empty() {
-        return match run(io::stdin(), args.format, None) {
+        return match run(io::stdin(), args.format, None, args.strict) {
             true => ExitCode::from(1),
             false => ExitCode::SUCCESS,
         };
@@ -74,7 +93,7 @@ fn main() -> ExitCode {
             }
         };
         let label = if label_paths { Some(path.as_str()) } else { None };
-        if run(file, args.format, label) {
+        if run(file, args.format, label, args.strict) {
             saw_finding = true;
         }
     }
@@ -88,8 +107,9 @@ fn main() -> ExitCode {
 
 /// Lints every record in `input`, printing findings as they're found.
 /// `source` is included in the output when linting one of several files.
+/// When `strict` is set, info findings are reported as warnings.
 /// Returns true if anything was flagged.
-fn run<R: Read>(input: R, format: Format, source: Option<&str>) -> bool {
+fn run<R: Read>(input: R, format: Format, source: Option<&str>, strict: bool) -> bool {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let mut saw_finding = false;
@@ -123,9 +143,12 @@ fn run<R: Read>(input: R, format: Format, source: Option<&str>) -> bool {
         };
 
         index += 1;
-        let findings = lint(&record);
+        let mut findings = lint(&record);
         if findings.is_empty() {
             continue;
+        }
+        if strict {
+            apply_strict(&mut findings);
         }
 
         saw_finding = true;
@@ -259,5 +282,37 @@ mod tests {
         .unwrap();
         assert_eq!(args.paths, vec!["a.txt", "b.txt"]);
         assert!(args.format == Format::Json);
+    }
+
+    #[test]
+    fn parse_args_accepts_strict_flag() {
+        let args = parse_args(vec!["--strict".to_string(), "headers.txt".to_string()].into_iter())
+            .unwrap();
+        assert!(args.strict);
+        assert_eq!(args.paths, vec!["headers.txt".to_string()]);
+    }
+
+    #[test]
+    fn parse_args_defaults_strict_to_false() {
+        let args = parse_args(Vec::<String>::new().into_iter()).unwrap();
+        assert!(!args.strict);
+    }
+
+    #[test]
+    fn apply_strict_upgrades_info_to_warning() {
+        let mut findings = vec![
+            Finding {
+                severity: Severity::Info,
+                message: "info message".to_string(),
+            },
+            Finding {
+                severity: Severity::Warning,
+                message: "warning message".to_string(),
+            },
+        ];
+        apply_strict(&mut findings);
+        assert!(findings.iter().all(|f| f.severity != Severity::Info));
+        assert_eq!(findings[0].severity, Severity::Warning);
+        assert_eq!(findings[1].severity, Severity::Warning);
     }
 }

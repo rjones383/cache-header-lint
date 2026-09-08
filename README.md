@@ -63,6 +63,15 @@ Records with no findings produce no output in either format, so the JSON
 output is one line per flagged record and can be piped straight into `jq`
 or similar.
 
+Pass `--strict` to report `info` findings as `warning` instead. This doesn't
+change which checks run or the exit code, just how the lower-priority ones
+read, for setups where an info-level nitpick like a missing `ETag` shouldn't
+be easy to skim past:
+
+```
+cachelint --strict headers.txt
+```
+
 ## Input format
 
 Records are separated by a blank line: a status line, then header lines,
@@ -100,7 +109,9 @@ argument-parsing crate would be adding weight without adding much.
 ## Status
 
 Early. The lint rules so far only cover a handful of `Cache-Control`
-and `Vary` contradictions; a `--strict` flag is still missing.
+and `Vary` contradictions. Status lines are assumed to start with
+`HTTP/`, so HTTP/2 captures that write a bare status code won't be
+recognized yet.
 
 ## License
 
