@@ -79,6 +79,10 @@ matching what `curl -D -` writes for each response. A file can hold many
 records back to back, which is the case this tool is built around — you
 point it at a log of headers collected from a crawl, not just one response.
 
+The status line can be a classic `HTTP/1.1 200 OK` line, or an HTTP/2
+`:status: 200` pseudo-header, which is what tools that dump HTTP/2 responses
+tend to write instead, since HTTP/2 has no status line on the wire.
+
 ## Library
 
 The CLI is a thin wrapper around the `cachelint` library:
@@ -109,9 +113,7 @@ argument-parsing crate would be adding weight without adding much.
 ## Status
 
 Early. The lint rules so far only cover a handful of `Cache-Control`
-and `Vary` contradictions. Status lines are assumed to start with
-`HTTP/`, so HTTP/2 captures that write a bare status code won't be
-recognized yet.
+and `Vary` contradictions.
 
 ## License
 

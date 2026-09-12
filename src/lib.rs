@@ -124,6 +124,11 @@ impl<R: io::Read> Iterator for Records<R> {
                 continue;
             }
 
+            if let Some(status) = parse_http2_status_line(trimmed) {
+                record.status_line = Some(status);
+                continue;
+            }
+
             if let Some((name, value)) = trimmed.split_once(':') {
                 record
                     .headers
@@ -136,6 +141,27 @@ impl<R: io::Read> Iterator for Records<R> {
         } else {
             Some(Ok(record))
         }
+    }
+}
+
+/// Recognizes an HTTP/2 `:status` pseudo-header line, e.g. `:status: 200`.
+///
+/// HTTP/2 has no status line on the wire, just this pseudo-header, so tools
+/// that dump HTTP/2 responses tend to write it verbatim instead of
+/// synthesizing an `HTTP/x.x` line the way curl does. It's turned into the
+/// same `HTTP/x.x`-shaped status line so the rest of the pipeline (and
+/// anyone reading the output) doesn't need to care which protocol version
+/// produced it.
+fn parse_http2_status_line(trimmed: &str) -> Option<String> {
+    if trimmed.len() < ":status".len() || !trimmed[..":status".len()].eq_ignore_ascii_case(":status") {
+        return None;
+    }
+    let rest = &trimmed[":status".len()..];
+    let value = rest.strip_prefix(':')?.trim();
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        Some(format!("HTTP/2 {value}"))
+    } else {
+        None
     }
 }
 
@@ -304,5 +330,35 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].get("cache-control"), Some("no-store"));
         assert_eq!(records[1].status_line.as_deref(), Some("HTTP/1.1 304 Not Modified"));
+    }
+
+    #[test]
+    fn recognizes_http2_status_pseudo_header() {
+        let input = b":status: 200\r\ncache-control: max-age=60\r\n";
+        let records: Vec<_> = Records::new(&input[..])
+            .collect::<io::Result<_>>()
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status_line.as_deref(), Some("HTTP/2 200"));
+        assert_eq!(records[0].get("cache-control"), Some("max-age=60"));
+    }
+
+    #[test]
+    fn recognizes_http2_status_pseudo_header_without_space() {
+        let input = b":status:304\r\n";
+        let records: Vec<_> = Records::new(&input[..])
+            .collect::<io::Result<_>>()
+            .unwrap();
+        assert_eq!(records[0].status_line.as_deref(), Some("HTTP/2 304"));
+    }
+
+    #[test]
+    fn ignores_other_pseudo_header_lines_as_status() {
+        let input = b":path: /\r\ncache-control: no-store\r\n";
+        let records: Vec<_> = Records::new(&input[..])
+            .collect::<io::Result<_>>()
+            .unwrap();
+        assert_eq!(records[0].status_line, None);
+        assert_eq!(records[0].get("cache-control"), Some("no-store"));
     }
 }
