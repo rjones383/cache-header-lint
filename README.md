@@ -103,6 +103,21 @@ for record in Records::new(stdin()) {
 `std::io::Read`. It never buffers more than the current record, so linting
 a multi-gigabyte capture file costs the same memory as linting one response.
 
+## Benchmark
+
+Stable Rust doesn't have a built-in bench harness (`#[bench]` needs
+nightly), so throughput is checked with a plain example binary instead.
+It builds a synthetic capture in memory and times `Records` + `lint`
+over it:
+
+```
+cargo run --release --example bench_synthetic
+cargo run --release --example bench_synthetic -- 2000000
+```
+
+The optional argument is the record count (default 500,000). Always
+use `--release`; debug builds are much slower and not representative.
+
 ## Why no dependencies
 
 This is a small, single-purpose tool. The standard library's `BufReader`
